@@ -29,11 +29,38 @@ jobs:
         env:
           PIXELDRAIN_URL: ${{ inputs.pixeldrain_url }}
         run: |
-          URL="${PIXELDRAIN_URL%/}"
-          FILE_ID="${URL##*/}"
+          # Strip any query string/fragment that might have been pasted in
+          # along with the link.
+          URL="${PIXELDRAIN_URL%%\?*}"
+          URL="${URL%%#*}"
+
+          # Pixeldrain links come in two shapes:
+          #   pixeldrain.com/d/{ID}
+          #   pixeldrain.com/d/{ID}/{display-filename}
+          # Extract the ID right after "/d/" or "/u/" so a trailing
+          # filename segment doesn't get mistaken for the ID.
+          FILE_ID=$(echo "$URL" | sed -E 's#.*pixeldrain\.com/[du]/([^/?#]+).*#\1#')
+
+          if [ -z "$FILE_ID" ] || [ "$FILE_ID" = "$URL" ]; then
+            echo "ERROR: Could not extract a Pixeldrain file ID from: $PIXELDRAIN_URL"
+            exit 1
+          fi
 
           echo "Pixeldrain URL: $URL"
           echo "File ID: $FILE_ID"
+
+          # Check the file actually exists before attempting the full
+          # download, so failures are easy to diagnose.
+          INFO_JSON=$(curl -s "https://pixeldrain.com/api/file/${FILE_ID}/info")
+          echo "Info response: $INFO_JSON"
+
+          SUCCESS=$(echo "$INFO_JSON" | grep -o '"success":[a-z]*' | cut -d: -f2)
+
+          if [ "$SUCCESS" != "true" ]; then
+            echo "ERROR: Pixeldrain has no file with ID '$FILE_ID'."
+            echo "Double check the link is correct, public, and not deleted/expired."
+            exit 1
+          fi
 
           HTTP_CODE=$(curl -L \
             -o input.mp4 \
@@ -43,7 +70,7 @@ jobs:
           echo "HTTP status: $HTTP_CODE"
 
           if [ "$HTTP_CODE" != "200" ]; then
-            echo "ERROR: Pixeldrain returned HTTP $HTTP_CODE"
+            echo "ERROR: Pixeldrain returned HTTP $HTTP_CODE on download"
             exit 1
           fi
 
