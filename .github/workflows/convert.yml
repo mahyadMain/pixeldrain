@@ -107,18 +107,19 @@ jobs:
             -b:a 128k \
             output_720p.mp4
 
-      - name: Put video in download folder
+      - name: Upload video as a GitHub Release asset
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          mkdir -p download
-          mv output_720p.mp4 download/output_720p.mp4
+          # GitHub rejects normal git commits/pushes for files over 100 MB,
+          # and this output is routinely 300+ MB, so we publish it as a
+          # Release asset instead (releases support assets up to 2 GB).
+          TAG="video-${{ github.run_id }}"
 
-      - name: Commit video
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          gh release create "$TAG" \
+            output_720p.mp4 \
+            --title "Converted video (run ${{ github.run_number }})" \
+            --notes "Automated 720p conversion from Pixeldrain source: ${{ inputs.pixeldrain_url }}"
 
-          git add download/output_720p.mp4
-
-          git commit -m "Add converted 720p video"
-
-          git push
+          echo "Release asset uploaded. Download URL:"
+          gh release view "$TAG" --json assets -q '.assets[0].url'
