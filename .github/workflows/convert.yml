@@ -34,43 +34,60 @@ jobs:
           URL="${PIXELDRAIN_URL%%\?*}"
           URL="${URL%%#*}"
 
-          # Pixeldrain links come in two shapes:
-          #   pixeldrain.com/d/{ID}
-          #   pixeldrain.com/d/{ID}/{display-filename}
-          # Extract the ID right after "/d/" or "/u/" so a trailing
-          # filename segment doesn't get mistaken for the ID.
-          FILE_ID=$(echo "$URL" | sed -E 's#.*pixeldrain\.com/[du]/([^/?#]+).*#\1#')
-
-          if [ -z "$FILE_ID" ] || [ "$FILE_ID" = "$URL" ]; then
-            echo "ERROR: Could not extract a Pixeldrain file ID from: $PIXELDRAIN_URL"
-            exit 1
+          # Pixeldrain has two different link shapes:
+          #   1) Single file:      pixeldrain.com/u/{id}  or  pixeldrain.com/d/{id}
+          #   2) File inside a shared directory (filesystem):
+          #                        pixeldrain.com/d/{dir_id}/{path/to/file.mp4}
+          # In shape 2, everything after the directory ID is a real file
+          # path inside that directory, not a cosmetic filename.
+          if echo "$URL" | grep -qE 'pixeldrain\.com/d/[^/]+/.+'; then
+            DIR_ID=$(echo "$URL" | sed -E 's#.*pixeldrain\.com/d/([^/]+)/.*#\1#')
+            FILE_PATH=$(echo "$URL" | sed -E 's#.*pixeldrain\.com/d/[^/]+/##')
+            DOWNLOAD_URL="https://pixeldrain.com/api/filesystem/${DIR_ID}/${FILE_PATH}?download"
+            echo "Detected shared-directory link"
+            echo "Directory ID: $DIR_ID"
+            echo "File path in directory: $FILE_PATH"
+          else
+            FILE_ID=$(echo "$URL" | sed -E 's#.*pixeldrain\.com/[du]/([^/?#]+).*#\1#')
+            if [ -z "$FILE_ID" ] || [ "$FILE_ID" = "$URL" ]; then
+              echo "ERROR: Could not extract a Pixeldrain file ID from: $PIXELDRAIN_URL"
+              exit 1
+            fi
+            DOWNLOAD_URL="https://pixeldrain.com/api/file/${FILE_ID}?download"
+            echo "Detected single-file link"
+            echo "File ID: $FILE_ID"
           fi
 
           echo "Pixeldrain URL: $URL"
-          echo "File ID: $FILE_ID"
+          echo "Download URL: $DOWNLOAD_URL"
 
-          # Check the file actually exists before attempting the full
-          # download, so failures are easy to diagnose.
-          INFO_JSON=$(curl -s "https://pixeldrain.com/api/file/${FILE_ID}/info")
-          echo "Info response: $INFO_JSON"
+          # For plain single-file links we can do a cheap existence check
+          # first via the info endpoint. The filesystem API (shared
+          # directories) doesn't have an equivalent lightweight check, so
+          # for those we just attempt the download directly.
+          if [ -n "${FILE_ID:-}" ]; then
+            INFO_JSON=$(curl -s "https://pixeldrain.com/api/file/${FILE_ID}/info")
+            echo "Info response: $INFO_JSON"
 
-          SUCCESS=$(echo "$INFO_JSON" | grep -o '"success":[a-z]*' | cut -d: -f2)
+            SUCCESS=$(echo "$INFO_JSON" | grep -o '"success":[a-z]*' | cut -d: -f2)
 
-          if [ "$SUCCESS" != "true" ]; then
-            echo "ERROR: Pixeldrain has no file with ID '$FILE_ID'."
-            echo "Double check the link is correct, public, and not deleted/expired."
-            exit 1
+            if [ "$SUCCESS" != "true" ]; then
+              echo "ERROR: Pixeldrain has no file with ID '$FILE_ID'."
+              echo "Double check the link is correct, public, and not deleted/expired."
+              exit 1
+            fi
           fi
 
           HTTP_CODE=$(curl -L \
             -o input.mp4 \
             -w "%{http_code}" \
-            "https://pixeldrain.com/api/file/${FILE_ID}?download")
+            "$DOWNLOAD_URL")
 
           echo "HTTP status: $HTTP_CODE"
 
           if [ "$HTTP_CODE" != "200" ]; then
             echo "ERROR: Pixeldrain returned HTTP $HTTP_CODE on download"
+            echo "If this was a shared-directory link, double check the file path is exact (case-sensitive, matches the URL segment after the directory ID)."
             exit 1
           fi
 
