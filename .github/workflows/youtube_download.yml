@@ -28,14 +28,32 @@ jobs:
       # 1. Install tools
       # --------------------------------------------------
 
-      - name: Install yt-dlp and FFmpeg
+      - name: Install yt-dlp, FFmpeg, Deno
         run: |
           sudo apt-get update
           sudo apt-get install -y ffmpeg p7zip-full
           python3 -m pip install -U yt-dlp
 
+          # yt-dlp needs a JS runtime to fully parse YouTube's page
+          curl -fsSL https://deno.land/install.sh | sh
+          echo "$HOME/.deno/bin" >> "$GITHUB_PATH"
+
       # --------------------------------------------------
-      # 2. Download YouTube video
+      # 2. Restore cookies (needed to pass YouTube's bot check)
+      # --------------------------------------------------
+
+      - name: Write cookies file
+        env:
+          YT_COOKIES_B64: ${{ secrets.YT_COOKIES_B64 }}
+        run: |
+          if [ -z "${YT_COOKIES_B64:-}" ]; then
+            echo "::warning::No YT_COOKIES_B64 secret set — download will likely fail with 'Sign in to confirm you're not a bot'."
+          else
+            echo "$YT_COOKIES_B64" | base64 -d > cookies.txt
+          fi
+
+      # --------------------------------------------------
+      # 3. Download YouTube video
       # --------------------------------------------------
 
       - name: Download video
@@ -45,10 +63,17 @@ jobs:
         run: |
           mkdir -p work
 
+          COOKIE_ARGS=()
+          if [ -f cookies.txt ]; then
+            COOKIE_ARGS=(--cookies cookies.txt)
+          fi
+
           yt-dlp \
             --newline \
             --progress \
             --no-color \
+            --js-runtimes deno \
+            "${COOKIE_ARGS[@]}" \
             --format "bv*[height<=720]+ba/b[height<=720]" \
             --merge-output-format mp4 \
             --no-playlist \
@@ -60,7 +85,7 @@ jobs:
           du -sh work/source.mp4
 
       # --------------------------------------------------
-      # 3. Compress / normalize video
+      # 4. Compress / normalize video
       # --------------------------------------------------
 
       - name: Compress to 720p low bitrate
@@ -91,7 +116,7 @@ jobs:
           du -sh output/video.mp4
 
       # --------------------------------------------------
-      # 4. Split into ~350 MB pieces
+      # 5. Split into ~350 MB pieces
       # --------------------------------------------------
 
       - name: Split into parts
@@ -108,7 +133,7 @@ jobs:
           ls -lh parts/
 
       # --------------------------------------------------
-      # 5. Create GitHub Release
+      # 6. Create GitHub Release
       # --------------------------------------------------
 
       - name: Create Release
