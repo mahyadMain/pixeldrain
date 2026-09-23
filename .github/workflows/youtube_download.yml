@@ -17,6 +17,7 @@ on:
 jobs:
   download:
     runs-on: ubuntu-latest
+    timeout-minutes: 90
 
     permissions:
       contents: write
@@ -40,15 +41,23 @@ jobs:
       - name: Download video
         env:
           URL: ${{ inputs.youtube_url }}
+          PYTHONUNBUFFERED: "1"
         run: |
           mkdir -p work
-          
+
           yt-dlp \
+            --newline \
+            --progress \
+            --no-color \
             --format "bv*[height<=720]+ba/b[height<=720]" \
             --merge-output-format mp4 \
             --no-playlist \
             --output "work/source.%(ext)s" \
             "$URL"
+
+          echo "---- Downloaded file info ----"
+          ls -lh work/
+          du -sh work/source.mp4
 
       # --------------------------------------------------
       # 3. Compress / normalize video
@@ -74,7 +83,12 @@ jobs:
             -af "volume=${VOLUME}" \
             -movflags +faststart \
             -map_metadata -1 \
+            -nostats -loglevel info -progress pipe:1 \
             "output/video.mp4"
+
+          echo "---- Compressed file info ----"
+          ls -lh output/
+          du -sh output/video.mp4
 
       # --------------------------------------------------
       # 4. Split into ~350 MB pieces
@@ -89,6 +103,9 @@ jobs:
             -mx=0 \
             a parts/video.7z \
             output/video.mp4
+
+          echo "---- Split parts ----"
+          ls -lh parts/
 
       # --------------------------------------------------
       # 5. Create GitHub Release
