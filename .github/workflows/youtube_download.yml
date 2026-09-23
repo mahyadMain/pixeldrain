@@ -1,0 +1,105 @@
+name: Download YouTube Video
+
+on:
+  workflow_dispatch:
+    inputs:
+      youtube_url:
+        description: "YouTube URL"
+        required: true
+        type: string
+
+      volume:
+        description: "Audio volume multiplier"
+        required: false
+        default: "0.20"
+        type: string
+
+jobs:
+  download:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+
+    steps:
+
+      # --------------------------------------------------
+      # 1. Install tools
+      # --------------------------------------------------
+
+      - name: Install yt-dlp and FFmpeg
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg p7zip-full
+          python3 -m pip install -U yt-dlp
+
+      # --------------------------------------------------
+      # 2. Download YouTube video
+      # --------------------------------------------------
+
+      - name: Download video
+        env:
+          URL: ${{ inputs.youtube_url }}
+        run: |
+          mkdir -p work
+          
+          yt-dlp \
+            --format "bv*[height<=720]+ba/b[height<=720]" \
+            --merge-output-format mp4 \
+            --no-playlist \
+            --output "work/source.%(ext)s" \
+            "$URL"
+
+      # --------------------------------------------------
+      # 3. Compress / normalize video
+      # --------------------------------------------------
+
+      - name: Compress to 720p low bitrate
+        env:
+          VOLUME: ${{ inputs.volume }}
+        run: |
+          mkdir -p output
+
+          ffmpeg \
+            -i work/source.mp4 \
+            -vf "scale=-2:720" \
+            -c:v libx264 \
+            -preset veryfast \
+            -b:v 550k \
+            -maxrate 650k \
+            -bufsize 1100k \
+            -c:a aac \
+            -b:a 32k \
+            -ac 1 \
+            -af "volume=${VOLUME}" \
+            -movflags +faststart \
+            -map_metadata -1 \
+            "output/video.mp4"
+
+      # --------------------------------------------------
+      # 4. Split into ~350 MB pieces
+      # --------------------------------------------------
+
+      - name: Split into parts
+        run: |
+          mkdir -p parts
+
+          7z \
+            -v350m \
+            -mx=0 \
+            a parts/video.7z \
+            output/video.mp4
+
+      # --------------------------------------------------
+      # 5. Create GitHub Release
+      # --------------------------------------------------
+
+      - name: Create Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create \
+            "download-${{ github.run_number }}" \
+            parts/* \
+            --title "YouTube Download ${{ github.run_number }}" \
+            --notes "720p compressed video split into 350 MB parts."
